@@ -250,17 +250,42 @@ if uploaded_file:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 🔥 ส่วนที่เพิ่มเข้ามาใหม่: ตารางสรุปจำนวนราย Zone ---
+        # --- ตารางสรุปจำนวนราย Zone (อัปเดตระบบคำนวณ Capacity และ แถว Sum) ---
         st.markdown("---")
-        st.subheader("📊 ตารางสรุปจำนวนฐานรากแยกตามช่วงน้ำหนัก (Zone Count Summary)")
+        st.subheader("📊 ตารางสรุปจำนวนฐานรากและโหลดรวมแยกตามช่วงน้ำหนัก (Zone Capacity Summary)")
         
-        # นับจำนวนจุดในแต่ละ Zone (observed=False เพื่อให้แสดงกลุ่มที่จำนวนเป็น 0 ด้วย)
+        # นับจำนวนจุดราย Zone
         df_zone_counts = df_envelope.groupby('Zone', observed=False).size().reset_index(name='จำนวนฐานราก (จุด)')
         total_points = len(df_envelope)
         df_zone_counts['สัดส่วนจากทั้งหมด (%)'] = ((df_zone_counts['จำนวนฐานราก (จุด)'] / total_points) * 100).round(1)
         
-        # แสดงผลตารางสรุปจำนวนย่อย
-        st.dataframe(df_zone_counts, use_container_width=True)
+        #คำนวณหาระดับขีดจำกัด (Load Capacity Limit) ของแต่ละโซน
+        zone_caps = []
+        for i, label in enumerate(labels):
+            if i < len(thresholds):
+                zone_caps.append(thresholds[i])
+            else:
+                # โซนสุดท้ายจับค่าที่สูงที่สุดที่เกิดขึ้นจริงเพื่อให้คำนวณผลคูณน้ำหนักรวมได้ใกล้เคียงความจริง
+                zone_data = df_envelope[df_envelope['Zone'] == label]
+                if not zone_data.empty:
+                    zone_caps.append(int(zone_data['Max_Load'].max()))
+                else:
+                    zone_caps.append(thresholds[-1])
+                    
+        df_zone_counts[f'Load Capacity ({force_unit})'] = zone_caps
+        df_zone_counts[f'Total Load ({force_unit})'] = df_zone_counts['จำนวนฐานราก (จุด)'] * df_zone_counts[f'Load Capacity ({force_unit})']
+        
+        # สร้างแถวสรุปผลรวม (Total SUM Row)
+        sum_row = pd.DataFrame({
+            'Zone': ['รวมทั้งหมด (Total SUM)'],
+            'จำนวนฐานราก (จุด)': [df_zone_counts['จำนวนฐานราก (จุด)'].sum()],
+            'สัดส่วนจากทั้งหมด (%)': [df_zone_counts['สัดส่วนจากทั้งหมด (%)'].sum().round(1)],
+            f'Load Capacity ({force_unit})': [np.nan],  # ไม่นำค่าลิมิตรายโซนมาบวกรวมกัน
+            f'Total Load ({force_unit})': [df_zone_counts[f'Total Load ({force_unit})'].sum()]
+        })
+        
+        df_zone_summary = pd.concat([df_zone_counts, sum_row], ignore_index=True)
+        st.dataframe(df_zone_summary, use_container_width=True)
 
         # --- ตารางสรุปแบบละเอียดเดิม ---
         st.subheader(f"📊 ตารางสรุปน้ำหนักวิกฤตสูงสุดรายต้น (Envelope Summary Table) จำนวน {total_points} จุดวิเคราะห์")
@@ -271,7 +296,7 @@ if uploaded_file:
         st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผลไฟล์: {e}")
 
 else:
-    # คู่มือแนะนำการใช้งานแสดงที่หน้าแรก (ครบถ้วนไม่มีตัดออก)
+    # คู่มือแนะนำการใช้งานแสดงที่หน้าแรก
     st.info("☝️ กรุณาอัปโหลดไฟล์ Excel (.xlsx) เพื่อเริ่มต้นระบบวิเคราะห์จัดโซน")
     st.markdown("""
     ### 📝 คู่มือการเตรียมข้อมูลจากโปรแกรม ETABS และแนวทางการใช้งาน
