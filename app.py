@@ -5,7 +5,7 @@ import numpy as np
 import re
 
 # 1. ตั้งค่าหน้ากระดาษ
-st.set_page_config(layout="wide", page_title="Foundation Zoning Dashboard v4")
+st.set_page_config(layout="wide", page_title="Foundation Zoning Dashboard v5")
 
 st.title("🏗️ Foundation Zoning & Pile Load Dashboard")
 st.markdown("---")
@@ -184,7 +184,6 @@ if uploaded_file:
 
         # --- Sidebar: แบ่งโซนน้ำหนัก (Dynamic Unit Binding) ---
         st.sidebar.header("🎯 แบ่งโซนน้ำหนักฐานราก")
-        # 🔥 ปรับชื่อตามหน่วยแรงที่อ่านได้จากไฟล์อัตโนมัติ
         zone_inputs = st.sidebar.text_input(f"ช่วงน้ำหนัก ขอบเขตหน่วย ({force_unit}):", "400, 800, 1500")
         
         try:
@@ -202,7 +201,6 @@ if uploaded_file:
         # --- Sidebar: การตั้งค่ากราฟและการปรับสเกลตัวเลข ---
         st.sidebar.header("🎨 ตั้งค่าการแสดงผลกราฟ")
         show_labels = st.sidebar.checkbox("👁️ แสดงตัวเลขน้ำหนักบนแผนที่", value=False)
-        # 🔥 เพิ่มตัวเลือกสเกลขนาดฟอนต์ของตัวเลขบนแผนที่
         font_size_scale = st.sidebar.slider("📐 ปรับขนาดตัวเลขพล็อตบนแผนที่", 5, 30, 10)
         marker_size_factor = st.sidebar.slider("🟢 ปรับขนาดจุดฐานราก", 10, 60, 25)
 
@@ -232,7 +230,6 @@ if uploaded_file:
             color_discrete_sequence=color_sequence, size_max=marker_size_factor
         )
         
-        # 🔥 นำค่าสเกลฟอนต์จาก Slider มาปรับแต่งที่นี่เพื่อแก้ปัญหากราฟเบียด
         if show_labels:
             fig.update_traces(
                 textposition='top center', 
@@ -241,7 +238,6 @@ if uploaded_file:
             
         fig.update_traces(marker=dict(line=dict(width=1, color='DarkSlateGrey')))
         
-        # 🎨 บังคับให้เป็นตัวหนังสือสีดำ เพื่อป้องกันปัญหาธีมขาว/ดำ ของบราวเซอร์ผู้ใช้งานมองไม่เห็นคำอธิบาย
         fig.update_layout(
             plot_bgcolor='white', paper_bgcolor='white', height=850, font=dict(color="black"),
             xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, title="X (m)", color="black"),
@@ -254,8 +250,20 @@ if uploaded_file:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- ตารางสรุป ---
-        st.subheader(f"📊 ตารางสรุปน้ำหนักวิกฤตสูงสุด (Envelope Summary Table) จำนวน {len(df_envelope)} จุดวิเคราะห์")
+        # --- 🔥 ส่วนที่เพิ่มเข้ามาใหม่: ตารางสรุปจำนวนราย Zone ---
+        st.markdown("---")
+        st.subheader("📊 ตารางสรุปจำนวนฐานรากแยกตามช่วงน้ำหนัก (Zone Count Summary)")
+        
+        # นับจำนวนจุดในแต่ละ Zone (observed=False เพื่อให้แสดงกลุ่มที่จำนวนเป็น 0 ด้วย)
+        df_zone_counts = df_envelope.groupby('Zone', observed=False).size().reset_index(name='จำนวนฐานราก (จุด)')
+        total_points = len(df_envelope)
+        df_zone_counts['สัดส่วนจากทั้งหมด (%)'] = ((df_zone_counts['จำนวนฐานราก (จุด)'] / total_points) * 100).round(1)
+        
+        # แสดงผลตารางสรุปจำนวนย่อย
+        st.dataframe(df_zone_counts, use_container_width=True)
+
+        # --- ตารางสรุปแบบละเอียดเดิม ---
+        st.subheader(f"📊 ตารางสรุปน้ำหนักวิกฤตสูงสุดรายต้น (Envelope Summary Table) จำนวน {total_points} จุดวิเคราะห์")
         display_cols = ['Name_Label', 'Type', 'Zone', 'Max_Load', 'Output Case', 'Z_Level', 'X', 'Y']
         st.dataframe(df_envelope[display_cols].sort_values('Max_Load', ascending=False), use_container_width=True)
 
@@ -263,7 +271,7 @@ if uploaded_file:
         st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผลไฟล์: {e}")
 
 else:
-    # 📝 คู่มือแนะนำการใช้งานที่กู้คืนกลับมาให้ครบถ้วน
+    # คู่มือแนะนำการใช้งานแสดงที่หน้าแรก (ครบถ้วนไม่มีตัดออก)
     st.info("☝️ กรุณาอัปโหลดไฟล์ Excel (.xlsx) เพื่อเริ่มต้นระบบวิเคราะห์จัดโซน")
     st.markdown("""
     ### 📝 คู่มือการเตรียมข้อมูลจากโปรแกรม ETABS และแนวทางการใช้งาน
