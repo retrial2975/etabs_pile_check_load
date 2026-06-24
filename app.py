@@ -5,12 +5,12 @@ import numpy as np
 import re
 
 # 1. ตั้งค่าหน้ากระดาษ
-st.set_page_config(layout="wide", page_title="Foundation Zoning Dashboard v3")
+st.set_page_config(layout="wide", page_title="Foundation Zoning Dashboard v4")
 
 st.title("🏗️ Foundation Zoning & Pile Load Dashboard")
 st.markdown("---")
 
-# 2. ฟังก์ชันตรวจสอบและโหลดข้อมูลเฉพาะที่มีอยู่จริง
+# 2. ฟังก์ชันตรวจสอบและโหลดข้อมูลแบบ Dynamic พร้อมดักจับหน่วยแรง
 @st.cache_data
 def load_etabs_data_dynamically(file):
     xl = pd.ExcelFile(file)
@@ -26,15 +26,34 @@ def load_etabs_data_dynamically(file):
     }
     
     data = {}
+    detected_unit = "Tons"  # ค่าเริ่มต้นหากไม่พบหน่วย
+    
     for key, sheet_title in target_sheets.items():
         if sheet_title in available_sheets:
-            df = pd.read_excel(file, sheet_name=sheet_title, skiprows=[0, 2])
+            # อ่านข้อมูลโดยข้ามเฉพาะแถวหัวข้อตารางแถวแรกสุด (TABLE: ...)
+            df = pd.read_excel(file, sheet_name=sheet_title, skiprows=[0])
             df.columns = df.columns.str.strip()
+            
+            if len(df) > 0:
+                # แถวแรกสุดของ DataFrame (แถวที่ 3 ใน Excel) คือแถวแสดงหน่วยแรงของ ETABS
+                unit_row = df.iloc[0]
+                
+                # ดักจับหน่วยแรงดิ่งจาก Sheet ที่มีค่าแรง
+                if key == "Joint_Rxn" and "FZ" in df.columns:
+                    detected_unit = str(unit_row["FZ"]).strip()
+                elif key == "Col_Forces" and "P" in df.columns:
+                    detected_unit = str(unit_row["P"]).strip()
+                elif key == "Pier_Forces" and "P" in df.columns:
+                    detected_unit = str(unit_row["P"]).strip()
+                
+                # ทำการลบแถวหน่วยแรงออกจากข้อมูลดิบ เพื่อไม่ให้รบกวนการคำนวณ
+                df = df.iloc[1:].reset_index(drop=True)
+            
             if 'UniqueName' in df.columns: 
                 df.rename(columns={'UniqueName': 'Unique Name'}, inplace=True)
             data[key] = df
             
-    return data
+    return data, detected_unit
 
 def extract_base_pier_name(name):
     name = str(name).strip()
@@ -47,7 +66,8 @@ uploaded_file = st.sidebar.file_uploader("📂 อัปโหลดไฟล์
 
 if uploaded_file:
     try:
-        loaded_data = load_etabs_data_dynamically(uploaded_file)
+        # โหลดข้อมูลและดักจับหน่วยแรงแบบ Dynamic
+        loaded_data, force_unit = load_etabs_data_dynamically(uploaded_file)
         
         mode = st.sidebar.radio(
             "🔄 เลือกโหมดการวิเคราะห์:",
@@ -139,6 +159,8 @@ if uploaded_file:
                     'Z': df_pier_grouped['Z'],
                     'Type': 'Core Wall'
                 })
+            else:
+                st.sidebar.info("ℹ️ ไม่พบข้อมูล Pier (ประมวลผลเฉพาะข้อมูลเสาเฟรม)")
 
             df_merged = pd.concat([df_col_final, df_pier_final], ignore_index=True)
 
@@ -160,26 +182,29 @@ if uploaded_file:
         else:
             selected_cases = st.sidebar.multiselect("เลือก Load", all_cases, default=[all_cases[0]] if all_cases else [])
 
-        # --- Sidebar: แบ่งโซนน้ำหนัก ---
+        # --- Sidebar: แบ่งโซนน้ำหนัก (Dynamic Unit Binding) ---
         st.sidebar.header("🎯 แบ่งโซนน้ำหนักฐานราก")
-        zone_inputs = st.sidebar.text_input("ช่วงน้ำหนัก (Tons):", "400, 800, 1500")
+        # 🔥 ปรับชื่อตามหน่วยแรงที่อ่านได้จากไฟล์อัตโนมัติ
+        zone_inputs = st.sidebar.text_input(f"ช่วงน้ำหนัก ขอบเขตหน่วย ({force_unit}):", "400, 800, 1500")
         
         try:
             thresholds = sorted([float(x.strip()) for x in zone_inputs.split(',')])
         except:
-            st.error("⚠️ กรุณากรอกตัวเลขให้ถูกต้อง เช่น 400, 800, 1500")
+            st.error(f"⚠️ กรุณากรอกตัวเลขให้ถูกต้อง คั่นด้วยเครื่องหมายจุลภาค เช่น 400, 800, 1500")
             st.stop()
 
         bins = [-np.inf] + thresholds + [np.inf]
-        labels = [f"1. 0 - {thresholds[0]} Tons"]
+        labels = [f"1. 0 - {thresholds[0]} {force_unit}"]
         for i in range(1, len(thresholds)):
-            labels.append(f"{i+1}. > {thresholds[i-1]} - {thresholds[i]} Tons")
-        labels.append(f"{len(thresholds)+1}. > {thresholds[-1]} Tons")
+            labels.append(f"{i+1}. > {thresholds[i-1]} - {thresholds[i]} {force_unit}")
+        labels.append(f"{len(thresholds)+1}. > {thresholds[-1]} {force_unit}")
 
-        # 🔥 ส่วนที่แก้ไขใหม่: การตั้งค่ากราฟ
+        # --- Sidebar: การตั้งค่ากราฟและการปรับสเกลตัวเลข ---
         st.sidebar.header("🎨 ตั้งค่าการแสดงผลกราฟ")
-        show_labels = st.sidebar.checkbox("👁️ แสดงตัวเลขน้ำหนักบนแผนที่", value=False, help="หากจุดเบียดกัน แนะนำให้ปิดแล้วใช้เมาส์ชี้ดูข้อมูลแทน")
-        marker_size_factor = st.sidebar.slider("ปรับขนาดจุดบนกราฟ", 10, 60, 25)
+        show_labels = st.sidebar.checkbox("👁️ แสดงตัวเลขน้ำหนักบนแผนที่", value=False)
+        # 🔥 เพิ่มตัวเลือกสเกลขนาดฟอนต์ของตัวเลขบนแผนที่
+        font_size_scale = st.sidebar.slider("📐 ปรับขนาดตัวเลขพล็อตบนแผนที่", 5, 30, 10)
+        marker_size_factor = st.sidebar.slider("🟢 ปรับขนาดจุดฐานราก", 10, 60, 25)
 
         # --- คำนวณ Envelope ---
         df_filtered = df_merged[
@@ -188,7 +213,7 @@ if uploaded_file:
         ].copy()
         
         if df_filtered.empty:
-            st.warning("⚠️ ไม่มีข้อมูลสำหรับเงื่อนไขที่เลือก")
+            st.warning("⚠️ ไม่มีข้อมูลสำหรับเงื่อนไขและ Load Case ที่เลือก")
             st.stop()
 
         df_envelope = df_filtered.sort_values('Max_Load').groupby('Name_Label').tail(1).copy()
@@ -196,11 +221,9 @@ if uploaded_file:
         df_envelope['Display_Load'] = df_envelope['Max_Load'].astype(int).astype(str)
 
         # --- ส่วนแสดงผลแผนที่ (Plotly) ---
-        st.subheader("📍 แผนที่จัดโซนฐานราก (Foundation Zoning Map)")
+        st.subheader(f"📍 แผนที่จัดโซนฐานราก (หน่วยแรงโมเดลนี้: {force_unit})")
         color_sequence = px.colors.qualitative.Set1 + px.colors.qualitative.Pastel
         symbol_col = 'Type' if mode.startswith("2") else None
-        
-        # ปิด-เปิด Text บนกราฟ
         text_col = "Display_Load" if show_labels else None
 
         fig = px.scatter(
@@ -209,31 +232,30 @@ if uploaded_file:
             color_discrete_sequence=color_sequence, size_max=marker_size_factor
         )
         
+        # 🔥 นำค่าสเกลฟอนต์จาก Slider มาปรับแต่งที่นี่เพื่อแก้ปัญหากราฟเบียด
         if show_labels:
-            fig.update_traces(textposition='top center', textfont=dict(family="Arial Black", size=10, color="black"))
+            fig.update_traces(
+                textposition='top center', 
+                textfont=dict(family="Arial Black", size=font_size_scale, color="black")
+            )
             
         fig.update_traces(marker=dict(line=dict(width=1, color='DarkSlateGrey')))
         
-        # 🔥 แก้ปัญหาตัวหนังสือขาวบนพื้นขาว
+        # 🎨 บังคับให้เป็นตัวหนังสือสีดำ เพื่อป้องกันปัญหาธีมขาว/ดำ ของบราวเซอร์ผู้ใช้งานมองไม่เห็นคำอธิบาย
         fig.update_layout(
-            plot_bgcolor='white', 
-            paper_bgcolor='white', 
-            height=850,
-            font=dict(color="black"), # บังคับตัวหนังสือทั้งกราฟเป็นสีดำ
+            plot_bgcolor='white', paper_bgcolor='white', height=850, font=dict(color="black"),
             xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, title="X (m)", color="black"),
             yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, title="Y (m)", scaleanchor="x", scaleratio=1, color="black"),
             legend=dict(
-                title=dict(text='ช่วงน้ำหนัก / ประเภท', font=dict(size=14, color="black")),
-                font=dict(size=12, color="black"),
-                bgcolor="rgba(255, 255, 255, 0.9)", # พื้นหลังกรอบใสๆ นิดนึง
-                bordercolor="black", 
-                borderwidth=1
+                title=dict(text=f'ช่วงน้ำหนัก ({force_unit}) / ประเภท', font=dict(size=14, color="black")),
+                font=dict(size=12, color="black"), bgcolor="rgba(255, 255, 255, 0.9)",
+                bordercolor="black", borderwidth=1
             )
         )
         st.plotly_chart(fig, use_container_width=True)
 
         # --- ตารางสรุป ---
-        st.subheader(f"📊 ตารางสรุปน้ำหนักวิกฤต (Envelope) จำนวน {len(df_envelope)} จุด")
+        st.subheader(f"📊 ตารางสรุปน้ำหนักวิกฤตสูงสุด (Envelope Summary Table) จำนวน {len(df_envelope)} จุดวิเคราะห์")
         display_cols = ['Name_Label', 'Type', 'Zone', 'Max_Load', 'Output Case', 'Z_Level', 'X', 'Y']
         st.dataframe(df_envelope[display_cols].sort_values('Max_Load', ascending=False), use_container_width=True)
 
@@ -241,4 +263,34 @@ if uploaded_file:
         st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผลไฟล์: {e}")
 
 else:
-    st.info("☝️ กรุณาอัปโหลดไฟล์ Excel เพื่อเริ่มต้นใช้งาน")
+    # 📝 คู่มือแนะนำการใช้งานที่กู้คืนกลับมาให้ครบถ้วน
+    st.info("☝️ กรุณาอัปโหลดไฟล์ Excel (.xlsx) เพื่อเริ่มต้นระบบวิเคราะห์จัดโซน")
+    st.markdown("""
+    ### 📝 คู่มือการเตรียมข้อมูลจากโปรแกรม ETABS และแนวทางการใช้งาน
+    แดชบอร์ดนี้ออกแบบมาเพื่อช่วยวิศวกรโครงสร้างในการทำ **Preliminary Design** เพื่อจัดโซนน้ำหนักและกะปริมาณเสาเข็มได้อย่างรวดเร็ว โดยแบ่งออกเป็น 2 โหมดอิสระตามความต้องการของทีมงาน
+    
+    ---
+    
+    #### 🟢 ทางเลือกที่ 1: สำหรับผู้ใช้ "โหมด 1: Joint Reactions" เท่านั้น
+    *(ใช้ตรวจสอบแรงปฏิกิริยาดิ่งแยกรายจุดต่อโหนด เหมาะสำหรับงานฐานรากแพหรือเช็ค Mesh ผนังแบบละเอียด)*
+    **ชื่อ Sheet ที่จำเป็นต้องมีในไฟล์ Excel:**
+    1. `Point Object Connectivity` *(ระบุตำแหน่งพิกัด)*
+    2. `Joint Reactions` *(ดึงแรง FZ ดิ่ง)*
+
+    ---
+
+    #### 🔵 ทางเลือกที่ 2: สำหรับผู้ใช้ "โหมด 2: Column + Pier" เท่านั้น
+    *(ใช้ยุบรวมแรงขาผนังลิฟต์/Core Wall และเสาอาคารให้ออกมาเป็นจุดศูนย์กลางชิ้นงานจุดเดียว สะดวกต่อการจัดกลุ่มผังฐานราก)*
+    **ชื่อ Sheet ที่จำเป็นต้องมีในไฟล์ Excel:**
+    1. `Point Object Connectivity` *(จำเป็น)*
+    2. `Column Object Connectivity` *(จำเป็น)*
+    3. `Element Forces - Columns` *(จำเป็น - ดึงแรง P สูงสุด)*
+    4. `Pier Forces` *(ใช้เมื่อโมเดลมี Core Wall - ดึงแรงที่ตำแหน่ง Bottom)*
+    5. `Pier Section Properties` *(ใช้เมื่อโมเดลมี Core Wall - ดึงพิกัด CG ล่างสุด)*
+
+    ---
+    
+    #### ⚙️ ฟีเจอร์อำนวยความสะดวกในเวอร์ชันนี้:
+    * **ระบบอ่านหน่วยอัตโนมัติ (Auto Unit Detection):** ตัวโปรแกรมจะอ่านแถวบอกหน่วยจาก ETABS เอง ไม่ว่าจะเป็นหน่วย `tonf`, `kN`, หรือ `kip` ช่องกรอกช่วงโซนน้ำหนักและตารางสรุปจะเปลี่ยนข้อความตามหน่วยนั้นๆ ทันทีโดยไม่ต้องตั้งค่าใหม่
+    * **แถบควบคุมกราฟอัจฉริยะ (Visual Scale Controls):** หากจุดบนแปลนฐานรากเบียดแน่นเกินไป แนะนำให้ **ปิด** การแสดงตัวเลขบนแผนที่ แล้วใช้เมาส์เลื่อนชี้ (Hover) เพื่อดูค่ารายต้น หรือใช้ Slider ปรับขนาดฟอนต์ตัวเลขให้เล็กลงตามสัดส่วนที่เหมาะสมได้เลยครับ
+    """)
