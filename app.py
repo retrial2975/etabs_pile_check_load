@@ -5,7 +5,7 @@ import numpy as np
 import re
 
 # 1. ตั้งค่าหน้ากระดาษ
-st.set_page_config(layout="wide", page_title="Foundation Zoning Dashboard v2")
+st.set_page_config(layout="wide", page_title="Foundation Zoning Dashboard v3")
 
 st.title("🏗️ Foundation Zoning & Pile Load Dashboard")
 st.markdown("---")
@@ -16,7 +16,6 @@ def load_etabs_data_dynamically(file):
     xl = pd.ExcelFile(file)
     available_sheets = xl.sheet_names
     
-    # แม่แบบชื่อ Sheet ที่เราต้องการค้นหา
     target_sheets = {
         "Points": "Point Object Connectivity",
         "Cols_Conn": "Column Object Connectivity",
@@ -37,7 +36,6 @@ def load_etabs_data_dynamically(file):
             
     return data
 
-# ฟังก์ชันจัดการชื่อ Pier
 def extract_base_pier_name(name):
     name = str(name).strip()
     base_name = re.sub(r'[_-]?[XY]\d*$', '', name, flags=re.IGNORECASE)
@@ -49,7 +47,6 @@ uploaded_file = st.sidebar.file_uploader("📂 อัปโหลดไฟล์
 
 if uploaded_file:
     try:
-        # โหลดข้อมูลแบบ Dynamic
         loaded_data = load_etabs_data_dynamically(uploaded_file)
         
         mode = st.sidebar.radio(
@@ -60,21 +57,17 @@ if uploaded_file:
         
         st.sidebar.markdown("---")
         
-        # --- ตรวจสอบเงื่อนไขการใช้ Sheet ของแต่ละโหมด ---
         df_merged = pd.DataFrame()
         
         if mode.startswith("1"):
-            # โหมด 1 ต้องการ: Points และ Joint_Rxn
             missing_sheets = []
             if "Points" not in loaded_data: missing_sheets.append("Point Object Connectivity")
             if "Joint_Rxn" not in loaded_data: missing_sheets.append("Joint Reactions")
             
             if missing_sheets:
                 st.error(f"❌ ไม่สามารถเปิดโหมด 1 ได้ เนื่องจากขาด Sheet: {', '.join(missing_sheets)}")
-                st.info("💡 คำแนะนำ: สำหรับโหมดนี้ ให้ Export เฉพาะ 'Point Object Connectivity' และ 'Joint Reactions' จาก ETABS ก็เพียงพอครับ")
                 st.stop()
                 
-            # เริ่มประมวลผลโหมด 1
             df_forces = loaded_data["Joint_Rxn"].copy()
             df_points = loaded_data["Points"].copy()
             
@@ -86,7 +79,6 @@ if uploaded_file:
             df_merged['Type'] = 'Joint Node'
             
         else:
-            # โหมด 2 ต้องการอย่างน้อย: Points, Cols_Conn, Col_Forces
             missing_sheets = []
             if "Points" not in loaded_data: missing_sheets.append("Point Object Connectivity")
             if "Cols_Conn" not in loaded_data: missing_sheets.append("Column Object Connectivity")
@@ -96,7 +88,6 @@ if uploaded_file:
                 st.error(f"❌ ไม่สามารถเปิดโหมด 2 ได้ เนื่องจากขาด Sheet หลัก: {', '.join(missing_sheets)}")
                 st.stop()
                 
-            # -- ส่วนเสา (Columns) --
             df_col_f = loaded_data["Col_Forces"].copy()
             df_col_c = loaded_data["Cols_Conn"].copy()
             df_pts = loaded_data["Points"].copy()
@@ -117,7 +108,6 @@ if uploaded_file:
                 'Type': 'Column'
             })
             
-            # -- ส่วนผนัง (Piers) -> ตรวจสอบแบบยืดหยุ่น ถ้าไม่มี Core Wall ก็ให้ผ่านได้
             df_pier_final = pd.DataFrame()
             if "Pier_Forces" in loaded_data and "Pier_Props" in loaded_data:
                 df_pier_f = loaded_data["Pier_Forces"].copy()
@@ -149,10 +139,7 @@ if uploaded_file:
                     'Z': df_pier_grouped['Z'],
                     'Type': 'Core Wall'
                 })
-            else:
-                st.sidebar.info("ℹ️ ไม่พบข้อมูล Pier (โปรแกรมประมวลผลเฉพาะข้อมูลเสา)")
 
-            # รวมข้อมูลตามที่มีจริง
             df_merged = pd.concat([df_col_final, df_pier_final], ignore_index=True)
 
         # --- Sidebar: เลือก Z-Level ---
@@ -189,6 +176,11 @@ if uploaded_file:
             labels.append(f"{i+1}. > {thresholds[i-1]} - {thresholds[i]} Tons")
         labels.append(f"{len(thresholds)+1}. > {thresholds[-1]} Tons")
 
+        # 🔥 ส่วนที่แก้ไขใหม่: การตั้งค่ากราฟ
+        st.sidebar.header("🎨 ตั้งค่าการแสดงผลกราฟ")
+        show_labels = st.sidebar.checkbox("👁️ แสดงตัวเลขน้ำหนักบนแผนที่", value=False, help="หากจุดเบียดกัน แนะนำให้ปิดแล้วใช้เมาส์ชี้ดูข้อมูลแทน")
+        marker_size_factor = st.sidebar.slider("ปรับขนาดจุดบนกราฟ", 10, 60, 25)
+
         # --- คำนวณ Envelope ---
         df_filtered = df_merged[
             (df_merged['Output Case'].isin(selected_cases)) & 
@@ -207,17 +199,36 @@ if uploaded_file:
         st.subheader("📍 แผนที่จัดโซนฐานราก (Foundation Zoning Map)")
         color_sequence = px.colors.qualitative.Set1 + px.colors.qualitative.Pastel
         symbol_col = 'Type' if mode.startswith("2") else None
+        
+        # ปิด-เปิด Text บนกราฟ
+        text_col = "Display_Load" if show_labels else None
 
         fig = px.scatter(
             df_envelope.sort_values('Zone'), x="X", y="Y", color="Zone", symbol=symbol_col,
-            size="Max_Load", text="Display_Load", hover_data=['Name_Label', 'Output Case', 'Z_Level'],
-            color_discrete_sequence=color_sequence, size_max=40
+            size="Max_Load", text=text_col, hover_data=['Name_Label', 'Output Case', 'Z_Level'],
+            color_discrete_sequence=color_sequence, size_max=marker_size_factor
         )
-        fig.update_traces(textposition='top center', textfont=dict(family="Arial Black", size=11, color="black"))
+        
+        if show_labels:
+            fig.update_traces(textposition='top center', textfont=dict(family="Arial Black", size=10, color="black"))
+            
+        fig.update_traces(marker=dict(line=dict(width=1, color='DarkSlateGrey')))
+        
+        # 🔥 แก้ปัญหาตัวหนังสือขาวบนพื้นขาว
         fig.update_layout(
-            plot_bgcolor='white', paper_bgcolor='white', height=850,
-            yaxis=dict(scaleanchor="x", scaleratio=1),
-            legend=dict(bordercolor="black", borderwidth=1)
+            plot_bgcolor='white', 
+            paper_bgcolor='white', 
+            height=850,
+            font=dict(color="black"), # บังคับตัวหนังสือทั้งกราฟเป็นสีดำ
+            xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, title="X (m)", color="black"),
+            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, title="Y (m)", scaleanchor="x", scaleratio=1, color="black"),
+            legend=dict(
+                title=dict(text='ช่วงน้ำหนัก / ประเภท', font=dict(size=14, color="black")),
+                font=dict(size=12, color="black"),
+                bgcolor="rgba(255, 255, 255, 0.9)", # พื้นหลังกรอบใสๆ นิดนึง
+                bordercolor="black", 
+                borderwidth=1
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -230,35 +241,4 @@ if uploaded_file:
         st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผลไฟล์: {e}")
 
 else:
-    # หน้าจอแนะนำ (User Guide) ที่ปรับปรุงใหม่ แยกโหมดชัดเจน
     st.info("☝️ กรุณาอัปโหลดไฟล์ Excel เพื่อเริ่มต้นใช้งาน")
-    st.markdown("""
-    ### 📝 คู่มือการเตรียมไฟล์ Excel จาก ETABS (แยกตามโหมดการใช้งาน)
-    โปรแกรมนี้ออกแบบมาให้ทำงานแบบ **ยืดหยุ่น** คุณสามารถเลือกที่จะ Export ไฟล์มาเฉพาะโหมดที่ต้องการใช้งานได้ โดยไม่จำเป็นต้องใช้ครบทุก Sheet ทุกครั้งครับ
-    
-    ---
-    
-    #### 🟢 ชุดที่ 1: ต้องการใช้ "โหมด 1: Joint Reactions" เท่านั้น
-    *(เหมาะสำหรับเช็คแรงปฏิกิริยาดิ่งแบบละเอียดรายโหนด Mesh)*
-    **ต้องการเพียง 2 ชื่อ Sheet นี้ในไฟล์ Excel:**
-    1. `Point Object Connectivity`
-    2. `Joint Reactions`
-
-    ---
-
-    #### 🔵 ชุดที่ 2: ต้องการใช้ "โหมด 2: Column + Pier" เท่านั้น
-    *(เหมาะสำหรับการรวมน้ำหนักขาผนังลิฟต์ วางผังจัดโซนเสาเข็มอาคารภาพรวม)*
-    **ต้องการชื่อ Sheet ดังนี้:**
-    1. `Point Object Connectivity` *(จำเป็น)*
-    2. `Column Object Connectivity` *(จำเป็น)*
-    3. `Element Forces - Columns` *(จำเป็น)*
-    4. `Pier Forces` *(ใช้เมื่อมี Core Wall)*
-    5. `Pier Section Properties` *(ใช้เมื่อมี Core Wall)*
-
-    ---
-    
-    #### 🟣 ชุดที่ 3: ต้องการใช้ทั้งสองโหมดสลับกัน
-    * ให้ทำการรวม Sheet ทั้งหมดของทั้งชุดที่ 1 และ ชุดที่ 2 ไว้ในไฟล์ Excel เดียวกันก่อนทำการอัปโหลดครับ
-    
-    *💡 ข้อแนะนำ: ตอน Export ตารางกลุ่ม Forces/Reactions จาก ETABS แนะนำให้ลากเลือกเฉพาะชิ้นส่วนและโหนดที่ **ชั้นฐานราก (Base/Bottom Station)** เท่านั้น เพื่อให้ขนาดไฟล์ไม่ใหญ่จนเกินไปและโปรแกรมประมวลผลได้อย่างรวดเร็ว*
-    """)
